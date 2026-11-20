@@ -18,6 +18,7 @@ What it is built around:
   spk run "task"                        one task, prints the answer, exits
   spk -c [run "task"]                   continue the last session
   spk spark | updates | eco             the Sparks' state, their updates, upstream news (no model call)
+  spk web [--port 8790]                 the same in a browser (phone too); prints a link with the access token
 
 Configuration: ~/.spk/config.json (servers, nodes); see config.example.json.
 """
@@ -104,6 +105,58 @@ def say(msg, color=DIM, end="\n"):
     print(f"{color}{msg}{RST}", end=end, flush=True)
 
 
+class Cancelled(Exception):
+    pass
+
+
+class CliUI:
+    """Where the core's output goes. The web front end (spk_web.py) has its own with the same methods."""
+    def __init__(self):
+        self.can_confirm = sys.stdin.isatty()
+        self.mode, self.waits = None, False
+
+    def _unwait(self):
+        if self.waits:
+            print("\r" + " " * 90 + "\r", end="", flush=True); self.waits = False
+
+    def info(self, m): self._unwait(); self._break(); say("  " + m)
+    def warn(self, m): self._unwait(); self._break(); say("  " + m, YEL)
+    def error(self, m): self._unwait(); self._break(); say("  " + m, RED)
+    def tool(self, m): self._unwait(); self._break(); say("  → " + m)
+
+    def waiting(self, m):
+        print(f"\r{DIM}  … {m}{RST}   ", end="", flush=True); self.waits = True
+
+    def _break(self):
+        if self.mode:
+            print(RST); self.mode = None
+
+    def think(self, t):
+        self._unwait()
+        if self.mode != "think":
+            self._break(); print(f"{DIM}  thinking: ", end=""); self.mode = "think"
+        print(f"{DIM}{t}", end="", flush=True)
+
+    def text(self, t):
+        self._unwait()
+        if self.mode != "text":
+            if self.mode: print(RST + "\n", end="")
+            self.mode = "text"
+        print(RST + t, end="", flush=True)
+
+    def end_reply(self, stats):
+        self._unwait(); self._break(); say(f"  [{stats}]")
+
+    def status(self, st):
+        say(f"  [{st['profile']}] context {'' if st['exact'] else '~'}{st['tokens']:,} / {st['context']:,} tokens "
+            f"(compacts at {st['compact_at']:,}); docs {st['docs']}; web {'on' if st['web'] else 'off'}; think {st['think']}")
+
+    def confirm(self, q):
+        return input(f"{YEL}  {q} [y/N] {RST}").strip().lower() == "y"
+
+    def user(self, text): pass
+
+
 def conf():
     c = json.loads(json.dumps(DEFAULTS))
     try:
@@ -171,8 +224,8 @@ def doc_block(path):
 # ---------- tools ----------
 
 class Tools:
-    def __init__(self, c, web, interactive):
-        self.c, self.web, self.interactive = c, web, interactive
+    def __init__(self, c, web, ui):
+        self.c, self.web, self.ui = c, web, ui
 
     def specs(self):
         # always the same list: the tools are part of the cached preamble, so switching web off must not change it
@@ -217,7 +270,7 @@ class Tools:
         if not os.path.exists(exe):
             return "{}"
         arg = arg.replace('"', " ").replace("\\", " ")          # the helper puts the argument into JSON as is
-        say(f"  ↗ {'search' if not flag else 'fetch'} (leaves this machine): {arg}", YEL)
+        self.ui.warn(f"↗ {'search' if not flag else 'fetch'} (leaves this machine): {arg}")
         return subprocess.run([exe] + ([flag] if flag else []) + [arg], capture_output=True, text=True, timeout=120).stdout
 
     def t_web_search(self, query):
@@ -240,10 +293,9 @@ class Tools:
 
     def t_write_file(self, path, content):
         p = os.path.abspath(os.path.expanduser(path))
-        if not self.interactive:
+        if not self.ui.can_confirm:
             return "refused: writing files needs an interactive session"
-        ans = input(f"{YEL}  write {p} ({len(content)} chars){' — OVERWRITE' if os.path.exists(p) else ''}? [y/N] {RST}").strip().lower()
-        if ans != "y":
+        if not self.ui.confirm(f"write {p} ({len(content)} chars){' — OVERWRITE' if os.path.exists(p) else ''}?"):
             return "the user declined"
         os.makedirs(os.path.dirname(p), exist_ok=True)
         with open(p, "w") as f:
@@ -266,6 +318,7 @@ class Server:
         self.base = self.p["base_url"].rstrip("/")
         self.think = THINK_STYLES[self.p["think_style"]]
         self.last_usage = None
+        self.ui, self.cancel = CliUI(), threading.Event()
 
     def _req(self, path, body=None):
         h = {"Content-Type": "application/json", "Authorization": "Bearer " + str(self.p["api_key"])}
@@ -320,26 +373,28 @@ class Server:
                 q.put(("err", e))
 
         threading.Thread(target=reader, daemon=True).start()
-        last, t0, waiting_shown = time.time(), time.time(), False
+        last, checked = time.time(), time.time()
         try:
             while True:
+                if self.cancel.is_set():
+                    raise Cancelled()
                 try:
-                    kind, val = q.get(timeout=15)
+                    kind, val = q.get(timeout=1)
                 except queue.Empty:
+                    if time.time() - checked < 15:
+                        continue
+                    checked = time.time()
                     h = self.health()
                     idle = time.time() - last
                     if h is None:
                         raise ServerDown(f"{self.base} stopped answering")
                     act, que = h.get("active"), h.get("queued")
                     where = f"server: {act} running, {que} waiting" if act is not None else "server up"
-                    say(f"\r  … no output for {idle:.0f} s ({where})   ", end="")
-                    waiting_shown = True
+                    self.ui.waiting(f"no output for {idle:.0f} s ({where})")
                     if idle > self.c["stall_seconds"] and act == 0 and not que:
                         raise Lost(f"no output for {idle:.0f} s and the server is idle")
                     continue
-                if waiting_shown:
-                    say("\r" + " " * 70 + "\r", end=""); waiting_shown = False
-                last = time.time()
+                last = checked = time.time()
                 if kind == "eof":
                     return
                 if kind == "http":
@@ -380,8 +435,11 @@ class Server:
         while time.time() < limit:
             if self.health() is not None:
                 return True
-            say(f"\r  server down, waiting for it to come back ({(limit - time.time()) / 60:.0f} min left)   ", RED, end="")
-            time.sleep(20)
+            self.ui.waiting(f"server down, waiting for it to come back ({(limit - time.time()) / 60:.0f} min left)")
+            for _ in range(20):
+                if self.cancel.is_set():
+                    raise Cancelled()
+                time.sleep(1)
         return False
 
 
@@ -412,6 +470,7 @@ class Session:
         self.messages = [{"role": "system", "content": SYSTEM.format(site=site)}]
         self.pinned = 1                 # messages[:pinned] are never compacted (system prompt + pinned documents)
         self.web, self.think, self.docs, self.profile = True, c["default_think"], [], None
+        self.ui = CliUI()
 
     def save(self):
         os.makedirs(SESS, exist_ok=True)
@@ -450,7 +509,7 @@ def compact(s, srv, tools, why=""):
     body = s.messages[s.pinned:]
     last_user = max((i for i, m in enumerate(body) if m["role"] == "user"), default=0)
     old, cur = body[:last_user], body[last_user:]
-    say(f"  compacting{(' (' + why + ')') if why else ''}: {len(old)} earlier messages into a summary ...")
+    s.ui.info(f"compacting{(' (' + why + ')') if why else ''}: {len(old)} earlier messages into a summary ...")
     if old:
         shrunk = [dict(m, content=cap(m["content"], 1500)) if m["role"] == "tool" and m.get("content") else m for m in old]
         req = s.messages[:s.pinned] + shrunk + [{"role": "user", "content":
@@ -477,7 +536,7 @@ def ensure_room(s, srv, tools):
         compact(s, srv, tools, f"{'' if exact else '~'}{n:,} tokens > {srv.p['compact_at']:,}")
         n, exact = size(s, srv, tools)
         if n > srv.p["context"] - srv.p["max_tokens"]:
-            say(f"  still {n:,} tokens after compacting: the pinned documents alone are too long for {srv.name}", RED)
+            s.ui.error(f"still {n:,} tokens after compacting: the pinned documents alone are too long for {srv.name}")
     return n
 
 
@@ -495,7 +554,8 @@ def one_call(s, srv, tools):
     calls of the reply (empty when it is a final answer)."""
     calls, cont, retries, prev_tail = [], 0, 0, ""
     while True:
-        t0, first, shown_r, content, fin = time.time(), None, False, "", None
+        t0, first, content, fin = time.time(), None, "", None
+        ui = s.ui
         hold = ""                     # after a length cut: the start of the continuation, held back until the part
                                       # that repeats the end of the cut-off text can be dropped
         rep = Repeats()
@@ -504,60 +564,55 @@ def one_call(s, srv, tools):
                 if first is None and kind in ("reasoning", "content", "tool"):
                     first = time.time() - t0
                 if kind == "reasoning":
-                    if not shown_r:
-                        say("  thinking: ", end=""); shown_r = True
-                    say(val, end="")
+                    ui.think(val)
                     if rep.feed(val):
                         fin = "repeat"; break
                 elif kind == "content":
-                    if shown_r and not content:
-                        print(RST + "\n", end="")
                     content += val
                     if prev_tail and len(content) < 80:
                         hold += val; continue
                     if prev_tail and hold is not None:
                         val = drop_overlap(prev_tail, hold + val); hold = None
-                    print(val, end="", flush=True)
+                    ui.text(val)
                     if rep.feed(val):
                         fin = "repeat"; break
                 elif kind == "tool":
                     calls.append(val)
                 elif kind == "finish":
                     fin = val
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, Cancelled):
             fin = "interrupted"
         except ServerDown as e:
-            say(f"\n  {e}", RED)
+            ui.error(str(e))
             if content or calls:
                 fin = "server-down"                    # keep what came; the loop below decides what to do
             elif srv.wait_up():
-                say("\n  server is back; sending the request again"); continue
+                ui.info("server is back; sending the request again"); continue
             else:
                 raise RuntimeError("the server did not come back")
         except Lost as e:
-            say(f"\n  {e}", RED)
+            ui.error(str(e))
             if retries < 1 and not content and not calls:
-                retries += 1; say("  sending the request again"); continue
+                retries += 1; ui.info("sending the request again"); continue
             fin = "lost"
         except TooLong:
             if retries < 2:
                 retries += 1; compact(s, srv, tools, "the server said the context is too long"); continue
             raise RuntimeError("the context is too long even after compacting")
         if prev_tail and hold:
-            print(drop_overlap(prev_tail, hold), end="")
-        print(RST)
+            ui.text(drop_overlap(prev_tail, hold))
         msg = {"role": "assistant", "content": content or None}
         if calls:
             msg["tool_calls"] = calls
         if content or calls:
             s.messages.append(msg)
-        say(f"  [{first or 0:.1f} s to first token, {time.time() - t0:.0f} s, finish {fin}]")
+        ui.end_reply(f"{first or 0:.1f} s to first token, {time.time() - t0:.0f} s, finish {fin}")
         broke = fin in ("server-down", "lost") and content
         if (fin == "length" or broke) and not calls and cont < s.c["auto_continue"]:
             cont += 1
             if fin == "server-down" and not srv.wait_up():
                 raise RuntimeError("the server did not come back")
-            say(f"  {'cut off by the length limit' if fin == 'length' else 'reply broke off'}: continuing ({cont}/{s.c['auto_continue']})")
+            ui.info(f"{'cut off by the length limit' if fin == 'length' else 'reply broke off'}: continuing ({cont}/{s.c['auto_continue']})")
             if not content:
                 s.messages.append({"role": "assistant", "content": "（思考过长被截断）"})
             s.messages.append({"role": "user", "content": CONTINUE_NOTE})
@@ -566,12 +621,12 @@ def one_call(s, srv, tools):
             ensure_room(s, srv, tools)
             continue
         if fin == "repeat":
-            say("  stopped: the reply was repeating itself", RED)
+            ui.error("stopped: the reply was repeating itself")
             s.messages.append({"role": "user", "content": "（你刚才的输出开始重复，已被截停。请换一种方式，简洁地给出结论。）"})
             if retries < 1:
                 retries += 1; continue
         if fin == "interrupted":
-            raise KeyboardInterrupt
+            raise Cancelled()
         if fin == "lost" and not content and not calls:
             raise RuntimeError("the server lost the request twice; nothing was answered")
         return calls
@@ -590,17 +645,20 @@ def turn(s, srv, tools):
                 args = json.loads(tc["function"].get("arguments") or "{}")
             except json.JSONDecodeError:
                 args = {}
-            say(f"  → {fn}({', '.join(f'{k}={str(v)[:60]!r}' for k, v in args.items())})")
+            s.ui.tool(f"{fn}({', '.join(f'{k}={str(v)[:60]!r}' for k, v in args.items())})")
             out = tools.run(fn, args)
             s.messages.append({"role": "tool", "tool_call_id": tc.get("id", ""), "name": fn, "content": out})
         s.save()
-    say(f"  stopped after {s.c['max_steps']} steps; say 'continue' to go on", RED)
+    s.ui.error(f"stopped after {s.c['max_steps']} steps; say 'continue' to go on")
 
 
 def status(s, srv, tools):
     n, exact = size(s, srv, tools)
-    say(f"  [{srv.name}] context {'' if exact else '~'}{n:,} / {srv.p['context']:,} tokens (compacts at "
-        f"{srv.p['compact_at']:,}); docs {len(s.docs)}; web {'on' if s.web else 'off'}; think {s.think}")
+    st = {"profile": srv.name, "model": srv.p["model"], "tokens": n, "exact": exact, "context": srv.p["context"],
+          "compact_at": srv.p["compact_at"], "docs": len(s.docs), "doc_names": [os.path.basename(d) for d in s.docs],
+          "web": s.web, "think": s.think}
+    s.ui.status(st)
+    return st
 
 
 HELP = """commands: /doc FILE...  pin documents   /web on|off   /think off|low|medium|high   /model [name]
@@ -639,7 +697,7 @@ def repl(s, srv, tools):
                 elif cmd == "/save": s.save(); print(f"  {s.path}")
                 else: print(HELP)
             except (OSError, RuntimeError) as e:
-                say(f"  {e}", RED)
+                s.ui.error(str(e))
             continue
         ask(s, srv, tools, line)
 
@@ -648,19 +706,21 @@ def ask(s, srv, tools, text):
     if len(s.messages) == s.pinned:
         text = f"(today is {datetime.date.today().isoformat()})\n" + text
     s.messages.append({"role": "user", "content": text})
+    s.ui.user(text)
+    srv.ui, tools.ui, srv.cancel = s.ui, s.ui, getattr(s, "cancel", None) or srv.cancel
     try:
         turn(s, srv, tools)
-    except KeyboardInterrupt:
-        say("\n  stopped (what was written is kept)", RED)
+    except (KeyboardInterrupt, Cancelled):
+        s.ui.error("stopped (what was written is kept)")
     except RuntimeError as e:
-        say(f"  {e}", RED)
+        s.ui.error(str(e))
     s.save()
     status(s, srv, tools)
 
 
 def main():
     ap = argparse.ArgumentParser(prog="spk", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("cmd", nargs="?", choices=["doc", "run", "spark", "updates", "eco"])
+    ap.add_argument("cmd", nargs="?", choices=["doc", "run", "spark", "updates", "eco", "web"])
     ap.add_argument("args", nargs="*")
     ap.add_argument("-q", "--question")
     ap.add_argument("-c", "--continue", dest="cont", action="store_true")
@@ -670,10 +730,18 @@ def main():
     ap.add_argument("-m", "--model", help="profile name from the config")
     ap.add_argument("--max-tokens", type=int, help="override the profile's max_tokens (per reply)")
     ap.add_argument("--compact-at", type=int, help="override the profile's compaction threshold (tokens)")
+    ap.add_argument("--host", default="0.0.0.0", help="spk web: address to listen on")
+    ap.add_argument("--port", type=int, default=8790, help="spk web: port")
+    ap.add_argument("--link", action="store_true", help="spk web: print the links (with the access token) and exit")
     a = ap.parse_args()
     c = conf()
     if a.cmd in ("spark", "updates", "eco"):
         print({"spark": spk_ops.status, "updates": spk_ops.updates, "eco": spk_ops.eco}[a.cmd]()); return
+    if a.cmd == "web":
+        import spk_web
+        if a.link:
+            return print("\n".join(spk_web.addresses(a.port, spk_web.token())))
+        return spk_web.main(c, a.host, a.port)
     if a.cont:
         files = sorted(f for f in os.listdir(SESS) if f.endswith(".json")) if os.path.isdir(SESS) else []
         if not files:
@@ -692,7 +760,8 @@ def main():
     if a.no_web: s.web = False
     if a.think: s.think = a.think
     interactive = a.cmd != "run" and sys.stdin.isatty()
-    tools = Tools(c, s.web, interactive)
+    s.ui.can_confirm = interactive
+    tools = Tools(c, s.web, s.ui)
     if a.cmd == "run" or a.question:
         ask(s, srv, tools, a.question or " ".join(a.args))
         if not interactive:

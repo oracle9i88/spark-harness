@@ -94,6 +94,23 @@ Tools the model has: `read_file` (numbered lines; txt, md, csv, json, pdf, docx)
 `fetch_url`, `spark_status`, `spark_updates`, `spark_ecosystem`, `write_file` (asks you first). There is no shell
 tool.
 
+## Web
+
+```bash
+spk web               # serves on all interfaces, port 8790; prints links that carry the access token
+spk web --link        # print the links again
+```
+
+The same harness in a browser, phone included: sessions, streaming replies (thinking folded), documents by upload or
+drag and drop, model / thinking / web switches, a context meter, a stop button, and the Spark panel (status, updates,
+upstream news). A turn runs on the server, so closing or reloading the page loses nothing: it reconnects and replays
+what it missed.
+
+Access needs the token in `~/.spk/web-token` (made on first start); open a printed link once per device and it sets
+a cookie. Requests without it get 403. The tools can read files on the machine running `spk web`, so treat the link
+like a password, and prefer a private network (Tailscale, LAN) over exposing the port. Uploaded files go to
+`~/.spk/uploads/`. Uploading the first document turns web tools off for that session, as in `spk doc`.
+
 ## Tests
 
 `tests/run_tests.sh` runs spk against `tests/mock_server.py`, a fake server that misbehaves on purpose: a reply cut
@@ -108,6 +125,7 @@ that is down. Each case must end on its own with the right message.
 - **不会卡死**：服务器排队、读提示、宕机、丢请求，都会显示出来并自动处理。宕机就等它回来再重发；丢了请求就重发一次。
 - **不用手动输入"继续"**：被长度上限截断会自动续写，最多 6 次；开始复读就截停。
 - **自动压缩**：每次调用模型前都会计数。超过阈值就把早先的对话压成摘要，钉住的文档和当前这轮不动。
+- **网页版**：`spk web`，手机也能用；页面关掉或刷新，对话照样在服务器上跑完，重新打开就接上。要带口令的链接才能进。
 - **Spark 运维（只读）**：温度、内存、服务状态、各节点的待装更新和版本差异，以及上游项目（TensorFold、exllamav3、NCCL、模型仓库）的新动态。不会安装或重启任何东西。
 - **隐私**：文档模式默认关掉联网搜索，每条外发的查询都会显示出来。
 

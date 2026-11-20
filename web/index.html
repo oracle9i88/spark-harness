@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>spk</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+<style>
+:root {
+  --bg: #f7f7f5; --panel: #ffffff; --ink: #1d1d1b; --muted: #75756f; --line: #e4e3de; --accent: #2f6f4f;
+  --accent-ink: #ffffff; --user: #eef3ef; --warn: #9a6400; --err: #b3261e; --code: #f1f0ec; --think: #8b8a83;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #161615; --panel: #1f1f1d; --ink: #e9e8e3; --muted: #9d9c95; --line: #2f2f2c; --accent: #5fae84;
+          --accent-ink: #0f1a14; --user: #23302a; --warn: #e0a640; --err: #ff8a80; --code: #2a2a27; --think: #8f8e87; }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.6 -apple-system, "PingFang SC", "Noto Sans SC", system-ui, sans-serif; }
+button, select, input, textarea { font: inherit; color: inherit; }
+.app { display: grid; grid-template-columns: 260px 1fr; height: 100dvh; }
+aside { border-right: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+aside header { padding: 14px 14px 8px; display: flex; gap: 8px; align-items: center; }
+aside header b { font-size: 17px; letter-spacing: .02em; flex: 1; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+.btn:hover { border-color: var(--muted); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--err); border-color: var(--err); }
+#sessions { overflow-y: auto; flex: 1; padding: 0 8px 12px; }
+.sess { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 8px 10px; border-radius: 8px;
+        cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--ink); }
+.sess small { display: block; color: var(--muted); font-size: 12px; }
+.sess.on, .sess:hover { background: var(--user); }
+aside footer { border-top: 1px solid var(--line); padding: 10px 12px; }
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.bar select { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 5px 8px; }
+.bar label { display: flex; gap: 5px; align-items: center; color: var(--muted); font-size: 14px; }
+.meter { flex: 1; min-width: 140px; display: flex; flex-direction: column; gap: 3px; font-size: 12px; color: var(--muted); }
+.meter div { height: 5px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+.docs { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 16px 0; }
+.chip { font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 10px; color: var(--muted); background: var(--panel); }
+#log { flex: 1; overflow-y: auto; padding: 16px 16px 24px; }
+.wrap { max-width: 860px; margin: 0 auto; }
+.msg { margin: 14px 0; }
+.msg.user { background: var(--user); border-radius: 12px; padding: 10px 14px; white-space: pre-wrap; margin-left: 12%; }
+.msg.assistant { padding: 0 2px; }
+.msg.assistant p { margin: .5em 0; }
+.msg.assistant pre { background: var(--code); padding: 10px 12px; border-radius: 8px; overflow-x: auto; font-size: 13px; }
+.msg.assistant code { background: var(--code); padding: 1px 4px; border-radius: 4px; font-size: 13px; }
+.msg.assistant pre code { padding: 0; background: none; }
+.msg.assistant table { border-collapse: collapse; display: block; overflow-x: auto; }
+.msg.assistant th, .msg.assistant td { border: 1px solid var(--line); padding: 4px 8px; }
+details.think { color: var(--think); font-size: 13px; margin: 6px 0; }
+details.think summary { cursor: pointer; }
+details.think div { white-space: pre-wrap; max-height: 320px; overflow-y: auto; border-left: 2px solid var(--line); padding-left: 10px; }
+.note { font-size: 13px; color: var(--muted); margin: 4px 0; white-space: pre-wrap; word-break: break-word; }
+.note.warn { color: var(--warn); } .note.error { color: var(--err); } .note.tool { font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.note.result { font-family: ui-monospace, Menlo, monospace; font-size: 12px; max-height: 5.2em; overflow: hidden; opacity: .75; }
+#waiting { font-size: 13px; color: var(--muted); padding: 0 16px; min-height: 1.6em; }
+.composer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 16px calc(10px + env(safe-area-inset-bottom)); }
+.composer .wrap { display: flex; gap: 8px; align-items: flex-end; }
+textarea { flex: 1; resize: none; border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; background: var(--bg); max-height: 40vh; min-height: 44px; }
+.drop { outline: 2px dashed var(--accent); outline-offset: -8px; }
+dialog { border: 1px solid var(--line); border-radius: 12px; background: var(--panel); color: var(--ink); width: min(900px, 94vw); max-height: 86vh; padding: 0; }
+dialog .head { display: flex; gap: 8px; align-items: center; padding: 12px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+dialog .head b { flex: 1; }
+dialog pre { margin: 0; padding: 14px; overflow: auto; max-height: 72vh; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; }
+.menu { display: none; }
+@media (max-width: 760px) {
+  .app { grid-template-columns: 1fr; }
+  aside { position: fixed; inset: 0 25% 0 0; z-index: 10; transform: translateX(-105%); transition: transform .2s; box-shadow: 0 0 30px rgba(0,0,0,.25); }
+  aside.open { transform: none; }
+  .menu { display: inline-block; }
+  .msg.user { margin-left: 6%; }
+  .meter { order: 9; min-width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside id="side">
+    <header><b>spk</b><button class="btn primary" id="newBtn">新对话</button></header>
+    <div id="sessions"></div>
+    <footer><button class="btn" id="sparkBtn" style="width:100%">Spark 状态 · 更新 · 生态</button></footer>
+  </aside>
+  <main>
+    <div class="bar">
+      <button class="btn menu" id="menuBtn">☰</button>
+      <select id="profile" title="模型"></select>
+      <select id="think" title="思考">
+        <option value="off">不思考</option><option value="low">少思考</option><option value="medium">中等</option><option value="high">多思考</option>
+      </select>
+      <label><input type="checkbox" id="web"> 联网</label>
+      <button class="btn" id="docBtn" title="钉文档：只读一遍，之后每个问题都复用">＋文档</button>
+      <input type="file" id="file" multiple hidden accept=".txt,.md,.csv,.json,.pdf,.docx,.doc,.rtf,.html,.xml,.log">
+      <button class="btn" id="compactBtn" title="把早先的对话压成摘要（文档不动）">压缩</button>
+      <div class="meter"><span id="ctx">上下文 –</span><div><i id="ctxbar"></i></div></div>
+    </div>
+    <div class="docs" id="docs"></div>
+    <div id="log"><div class="wrap" id="msgs"></div></div>
+    <div id="waiting"></div>
+    <div class="composer"><div class="wrap">
+      <textarea id="input" rows="1" placeholder="问点什么（Enter 发送，Shift+Enter 换行，文件可拖进来）"></textarea>
+      <button class="btn primary" id="sendBtn">发送</button>
+      <button class="btn danger" id="stopBtn" hidden>停止</button>
+    </div></div>
+  </main>
+</div>
+<dialog id="ops">
+  <div class="head"><b>Spark</b>
+    <button class="btn" data-what="status">状态</button><button class="btn" data-what="updates">更新</button>
+    <button class="btn" data-what="eco">生态动态</button><button class="btn" id="opsClose">关闭</button></div>
+  <pre id="opsOut">选一项。只读：不会安装或重启任何东西。</pre>
+</dialog>
+<script>
+const $ = (id) => document.getElementById(id);
+let sid = null, es = null, busy = false, cur = null;      // cur: the assistant message being written
+const api = async (path, body) => {
+  const r = await fetch(path, body === undefined ? {} : {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+};
+const md = (t) => {
+  try { if (window.marked && window.DOMPurify) return DOMPurify.sanitize(marked.parse(t)); } catch (e) {}
+  const d = document.createElement("div"); d.textContent = t; return d.innerHTML.replace(/\n/g, "<br>");
+};
+const atBottom = () => { const l = $("log"); return l.scrollHeight - l.scrollTop - l.clientHeight < 80; };
+const down = (force) => { const l = $("log"); if (force || atBottom()) l.scrollTop = l.scrollHeight; };
+
+function add(cls, html, text) {
+  const d = document.createElement("div"); d.className = "msg " + cls;
+  if (text !== undefined) d.textContent = text; else d.innerHTML = html;
+  $("msgs").appendChild(d); return d;
+}
+function note(kind, text) {
+  const stick = atBottom(); const d = document.createElement("div"); d.className = "note " + kind; d.textContent = text;
+  $("msgs").appendChild(d); down(stick); if (kind !== "tool") closeCur();
+}
+function closeCur() { if (cur) { cur.done = true; } cur = null; }
+function assistant() {
+  if (cur && !cur.done) return cur;
+  const el = add("assistant", "");
+  const think = document.createElement("details"); think.className = "think"; think.hidden = true;
+  think.innerHTML = "<summary>思考</summary><div></div>";
+  const body = document.createElement("div");
+  el.append(think, body);
+  cur = {el, think, thinkDiv: think.querySelector("div"), body, text: "", raf: 0};
+  return cur;
+}
+function paint(c) {
+  if (c.raf) return;
+  c.raf = requestAnimationFrame(() => { const stick = atBottom(); c.body.innerHTML = md(c.text); c.raf = 0; down(stick); });
+}
+function setBusy(b) {
+  busy = b; $("stopBtn").hidden = !b; $("sendBtn").hidden = b;
+  if (!b) { $("waiting").textContent = ""; closeCur(); refreshSessions(); }
+}
+function showStatus(st) {
+  if (!st || st.tokens === undefined) return;
+  const pct = Math.min(100, 100 * st.tokens / st.context);
+  $("ctx").textContent = `上下文 ${st.exact ? "" : "≈"}${st.tokens.toLocaleString()} / ${st.context.toLocaleString()}（${st.compact_at.toLocaleString()} 自动压缩）`;
+  $("ctxbar").style.width = pct + "%";
+  $("docs").innerHTML = ""; (st.doc_names || []).forEach(n => { const c = document.createElement("span"); c.className = "chip"; c.textContent = "📄 " + n; $("docs").appendChild(c); });
+  $("profile").value = st.profile; $("think").value = st.think; $("web").checked = st.web;
+}
+function onEvent(e) {
+  const d = e.data;
+  switch (e.type) {
+    case "user": closeCur(); add("user", null, d.replace(/^\(today is [0-9-]+\)\n/, "")); down(true); break;
+    case "think": { const c = assistant(); c.think.hidden = false; c.thinkDiv.textContent += d; $("waiting").textContent = "思考中…"; break; }
+    case "text": { const c = assistant(); c.text += d; paint(c); $("waiting").textContent = ""; break; }
+    case "waiting": $("waiting").textContent = "… " + d.replace("no output for", "已等").replace(" s", " 秒").replace("server:", "服务器：").replace("running", "个在跑").replace("waiting)", "个排队)"); break;
+    case "end_reply": $("waiting").textContent = ""; if (cur) { const s = document.createElement("div"); s.className = "note"; s.textContent = d; cur.el.appendChild(s); } break;
+    case "info": note("", d); break;
+    case "warn": note("warn", d); break;
+    case "error": note("error", d); break;
+    case "tool": note("tool", "→ " + d); break;
+    case "status": showStatus(d); break;
+    case "busy": setBusy(d); break;
+    case "confirm": api("/api/confirm", {id: sid, cid: d.cid, ok: confirm(d.q)}); break;
+  }
+}
+function listen(since) {
+  if (es) es.close();
+  es = new EventSource(`/api/events?id=${sid}&since=${since}`);
+  es.onmessage = (m) => onEvent(JSON.parse(m.data));
+  es.onerror = () => { $("waiting").textContent = "连接断了，重连中…"; };
+}
+async function openSession(id) {
+  sid = id; localStorage.setItem("spk_sid", id); cur = null;
+  const j = await api("/api/session?id=" + id);
+  $("msgs").innerHTML = "";
+  for (const it of j.items) {
+    if (it.type === "user") add("user", null, it.text);
+    else if (it.type === "assistant") add("assistant", md(it.text));
+    else if (it.type === "tool") note("tool", "→ " + it.text);
+    else if (it.type === "tool_result") note("result", it.text);
+  }
+  $("profile").value = j.profile; $("think").value = j.think; $("web").checked = j.web;
+  setBusy(j.busy); down(true);
+  document.querySelectorAll(".sess").forEach(b => b.classList.toggle("on", b.dataset.id === id));
+  listen(j.seq);
+  api("/api/status", {id}).then(showStatus).catch(() => {});
+  $("side").classList.remove("open");
+}
+async function refreshSessions() {
+  const list = await api("/api/sessions");
+  $("sessions").innerHTML = "";
+  for (const s of list) {
+    const b = document.createElement("button"); b.className = "sess" + (s.id === sid ? " on" : ""); b.dataset.id = s.id;
+    b.textContent = s.title; const sm = document.createElement("small");
+    sm.textContent = new Date(s.mtime * 1000).toLocaleString("zh-CN", {month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit"});
+    b.appendChild(sm); b.onclick = () => openSession(s.id); $("sessions").appendChild(b);
+  }
+  return list;
+}
+async function newSession() {
+  $("input").disabled = $("sendBtn").disabled = true;
+  try { const j = await api("/api/new", {profile: $("profile").value}); await openSession(j.id); refreshSessions(); }
+  finally { $("input").disabled = $("sendBtn").disabled = false; $("input").focus(); }
+}
+async function send() {
+  const t = $("input").value.trim(); if (!t || busy) return;
+  if (!sid) await newSession();
+  $("input").value = ""; grow();
+  try { await api("/api/send", {id: sid, text: t}); } catch (e) { note("error", e.message); $("input").value = t; }
+}
+async function upload(files) {
+  if (!files.length) return;
+  if (!sid) await newSession();
+  for (const f of files) {
+    note("", `读入 ${f.name} …`);
+    try { const r = await fetch(`/api/upload?id=${sid}&name=${encodeURIComponent(f.name)}`, {method: "POST", body: f});
+          const j = await r.json(); if (!r.ok) throw new Error(j.error); showStatus(j); note("", `已钉住 ${f.name}：只读一遍，之后每个问题都复用。`); }
+    catch (e) { note("error", `${f.name}: ${e.message}`); }
+  }
+  refreshSessions();
+}
+const settings = (b) => sid && api("/api/settings", Object.assign({id: sid}, b)).then(showStatus).catch(e => note("error", e.message));
+function grow() { const t = $("input"); t.style.height = "auto"; t.style.height = Math.min(t.scrollHeight, innerHeight * .4) + "px"; }
+
+$("sendBtn").onclick = send;
+$("stopBtn").onclick = () => api("/api/stop", {id: sid});
+$("newBtn").onclick = newSession;
+$("input").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+$("input").addEventListener("input", grow);
+$("profile").onchange = () => settings({profile: $("profile").value});
+$("think").onchange = () => settings({think: $("think").value});
+$("web").onchange = () => settings({web: $("web").checked});
+$("docBtn").onclick = () => $("file").click();
+$("file").onchange = () => { upload([...$("file").files]); $("file").value = ""; };
+$("compactBtn").onclick = () => sid && api("/api/compact", {id: sid}).catch(e => note("error", e.message));
+$("menuBtn").onclick = () => $("side").classList.toggle("open");
+$("sparkBtn").onclick = () => $("ops").showModal();
+$("opsClose").onclick = () => $("ops").close();
+document.querySelectorAll("#ops [data-what]").forEach(b => b.onclick = async () => {
+  $("opsOut").textContent = "读取中…（生态动态第一次要半分钟）";
+  try { $("opsOut").textContent = (await api("/api/ops?what=" + b.dataset.what)).text; } catch (e) { $("opsOut").textContent = "出错：" + e.message; }
+});
+const main = document.querySelector("main");
+main.addEventListener("dragover", (e) => { e.preventDefault(); main.classList.add("drop"); });
+main.addEventListener("dragleave", () => main.classList.remove("drop"));
+main.addEventListener("drop", (e) => { e.preventDefault(); main.classList.remove("drop"); upload([...e.dataTransfer.files]); });
+
+(async () => {
+  const profs = await api("/api/profiles");
+  for (const p of profs) { const o = document.createElement("option"); o.value = p.name; o.textContent = p.name; o.title = `${p.model} — ${p.note}`; $("profile").appendChild(o); }
+  const list = await refreshSessions();
+  const last = localStorage.getItem("spk_sid");
+  if (last && list.some(s => s.id === last)) openSession(last); else if (list.length) openSession(list[0].id);
+})();
+</script>
+</body>
+</html>
