@@ -1,0 +1,49 @@
+{
+ "profile": "inkling",
+ "site": "Two DGX Sparks (spark-a + spark-b) serve Inkling-2-Small.",
+ "profiles": {
+  "inkling": {
+   "base_url": "http://spark-a:18100",
+   "model": "inkling-2-small",
+   "context": 524288,
+   "compact_at": 360000,
+   "max_tokens": 32768,
+   "tokenize": true,
+   "slots": 4,
+   "think_style": "budget",
+   "note": "github.com/oracle9i88/inkling2-exl3 engine: /tokenize, thinking_budget, prefix cache"
+  },
+  "other": {
+   "base_url": "http://spark-c:8000",
+   "model": "your-model-id",
+   "context": 262144,
+   "max_tokens": 32768,
+   "think_style": "effort",
+   "note": "any OpenAI-compatible server; context counted approximately"
+  }
+ },
+ "nodes": [
+  {
+   "name": "spark-a",
+   "ssh": "user@spark-a",
+   "role": "Inkling rank 0 (API :18100)",
+   "health": "http://spark-a:18100/health"
+  },
+  {
+   "name": "spark-b",
+   "ssh": "user@spark-b",
+   "role": "Inkling rank 1"
+  },
+  {
+   "name": "spark-c",
+   "ssh": "user@spark-c",
+   "via": "user@spark-a",
+   "role": "reachable only through spark-a"
+  }
+ ],
+ "eco_pins": {
+  "thinkingmachines/Inkling-2-Small": "2ad1157"
+ },
+ "eco_repos": [],
+ "eco_models": []
+}
